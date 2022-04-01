@@ -189,3 +189,60 @@ class UartRxThread(bitDelay: Int) extends IsThread {
     }
   }
 }
+
+
+  object Test {
+    def receiveByte(byte: UInt) = {
+      Do {
+        dut.io.uartRx.poke(false.B)
+      }
+        .step(bitDelay)
+
+
+      // Byte
+      for (i <- 0 until 8) {
+        Do {
+          dut.io.uartRx.poke(byte(i))
+        }
+          .step(bitDelay)
+      }
+      // Stop bit
+      Do {
+        dut.io.uartRx.poke(true.B)
+      }
+        .step(bitDelay)
+    }
+
+
+    def transferByte(): Future[Int] = {
+      Do {
+        var byte = 0
+          // Assumes start bit has already been seen
+          step(bitDelay)
+          // Byte
+          .Do(
+            for (i <- 0 until 8) {
+              yield
+              Do {
+                byte = (dut.io.uartTx.peek.litToBoolean << i) | byte
+              }.
+                step(bitDelay)
+            }
+          )
+        // Stop bit
+        Do {
+          dut.io.uartTx.expect(true.B)
+          //dut.clock.step(bitDelay)
+          byte
+        }
+      }
+    }
+  }
+
+
+trait Cmd {
+  def step(n: Int = 1): Step
+}
+
+case class Do(foo: () => Unit, next: Option[Cmd] = None) extends Cmd
+case class Step(n: Int = 1, next: Option[Cmd] = None) extends Cmd
