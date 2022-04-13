@@ -2,6 +2,7 @@ package neuroproc.systemtests
 
 import chiseltest._
 import chisel3._
+import chiseltest.internal.NoThreadingAnnotation
 import neuroproc._
 
 import scala.collection.mutable
@@ -10,8 +11,12 @@ import scala.collection.mutable
 class NeuromorphicProcessorManualThreadTester extends NeuromorphicProcessorTester {
 
   it should "process an image" taggedAs (SlowTest) in {
+    val startElab = System.nanoTime()
     test(new NeuromorphicProcessor())
-      .withAnnotations(Seq(VerilatorBackendAnnotation, WriteVcdAnnotation)) { dut =>
+      .withAnnotations(Seq(VerilatorBackendAnnotation, NoThreadingAnnotation)) { dut =>
+        println(s"Took ${(System.nanoTime() - startElab) / 1e9d}s to elaborate, compile and create simulation")
+        val startTest = System.nanoTime()
+        var cycles = 1L
         dut.clock.setTimeout(FREQ)
 
         // Reset inputs
@@ -19,6 +24,7 @@ class NeuromorphicProcessorManualThreadTester extends NeuromorphicProcessorTeste
         dut.io.uartTx.expect(true.B)
         dut.reset.poke(true.B)
         dut.clock.step()
+        cycles += 1
         dut.reset.poke(false.B)
         dut.io.uartTx.expect(true.B)
 
@@ -35,6 +41,7 @@ class NeuromorphicProcessorManualThreadTester extends NeuromorphicProcessorTeste
           spikeRxThread.step(dut)
           txThread.step(dut)
           dut.clock.step()
+          cycles += 1
         }
 
         println("Loading image into accelerator")
@@ -57,6 +64,10 @@ class NeuromorphicProcessorManualThreadTester extends NeuromorphicProcessorTeste
         val spikes = spikeRxThread.spikes
         assert(spikes.length == results.length, "number of spikes does not match expected")
         assert(spikes.zip(results).map(x => x._1 == x._2).reduce(_ && _), "spikes do not match expected")
+
+        val deltaSeconds = (System.nanoTime() - startTest) / 1e9d
+        println(s"Took ${deltaSeconds}s to run test with manual threading and using the chiseltest interface with the NoThreadingAnnotation")
+        println(s"Executed $cycles cycles at an average frequency of ${cycles / deltaSeconds} Hz")
       }
   }
 }
