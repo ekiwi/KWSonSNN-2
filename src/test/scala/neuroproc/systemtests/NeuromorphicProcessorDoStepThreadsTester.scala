@@ -4,17 +4,21 @@ import chisel3._
 import chiseltest._
 import neuroproc._
 
+import scala.collection.mutable
+
 class NeuromorphicProcessorDoStepThreadsTester extends NeuromorphicProcessorTester {
 
   it should "process an image" taggedAs (SlowTest) in {
     test(new NeuromorphicProcessor())
-      .withAnnotations(Seq(VerilatorBackendAnnotation, WriteVcdAnnotation)) { dut =>
+      .withAnnotations(Seq(VerilatorBackendAnnotation, WriteVcdAnnotation))(RunTest { dut =>
         dut.clock.setTimeout(FREQ)
 
-        def receiveByte(byte: UInt): Unit = {
+        def receiveByte(byte: UInt): Cmd = {
           // Start bit
-          dut.io.uartRx.poke(false.B)
-          dut.clock.step(bitDelay)
+          Do {
+            dut.io.uartRx.poke(false.B)
+          }
+          Step(bitDelay)
           // Byte
           for (i <- 0 until 8) {
             dut.io.uartRx.poke(byte(i))
@@ -23,6 +27,8 @@ class NeuromorphicProcessorDoStepThreadsTester extends NeuromorphicProcessorTest
           // Stop bit
           dut.io.uartRx.poke(true.B)
           dut.clock.step(bitDelay)
+
+          ???
         }
 
         def transferByte(): Int = {
@@ -41,17 +47,21 @@ class NeuromorphicProcessorDoStepThreadsTester extends NeuromorphicProcessorTest
         }
 
         // Reset inputs
-        dut.io.uartRx.poke(true.B)
-        dut.io.uartTx.expect(true.B)
-        dut.reset.poke(true.B)
-        dut.clock.step()
-        dut.reset.poke(false.B)
-        dut.io.uartTx.expect(true.B)
+        Do {
+          dut.io.uartRx.poke(true.B)
+          dut.io.uartTx.expect(true.B)
+          dut.reset.poke(true.B)
+        }
+        Step()
+        Do {
+          dut.reset.poke(false.B)
+          dut.io.uartTx.expect(true.B)
+        }
 
         // Spawn a receiver thread
         var spikes = Array[Int]()
         var receive = true
-        val rec = fork {
+        val rec = Fork {
           while (receive) {
             if (!dut.io.uartTx.peek.litToBoolean) {
               val s = transferByte()
@@ -61,37 +71,112 @@ class NeuromorphicProcessorDoStepThreadsTester extends NeuromorphicProcessorTest
             }
             dut.clock.step()
           }
+          ???
         }
 
-        // Load an image into the accelerator ...
-        println("Loading image into accelerator")
-        for (i <- image.indices) {
-          // Write top byte of index, bottom byte of index, top byte
-          // of rate, and bottom byte of rate
-          receiveByte((i >> 8).U(8.W))
-          receiveByte((i & 0xff).U(8.W))
-          receiveByte((image(i) >> 8).U(8.W))
-          receiveByte((image(i) & 0xff).U(8.W))
+        Do {
+          // Load an image into the accelerator ...
+          println("Loading image into accelerator")
+          val recv = for (i <- image.indices)
+            // Write top byte of index, bottom byte of index, top byte
+            // of rate, and bottom byte of rate
+            yield Seq(receiveByte((i >> 8).U(8.W)),
+              receiveByte((i & 0xff).U(8.W)),
+              receiveByte((image(i) >> 8).U(8.W)),
+              receiveByte((image(i) & 0xff).U(8.W)))
+          print("Done loading image - ")
+          recv
         }
-        print("Done loading image - ")
 
         // ... get its response
-        println("getting accelerator's response")
-        dut.clock.step(FREQ/2)
-        receive = false
-        rec.join
+        Do {
+          println("getting accelerator's response")
+        }
+        Step(FREQ/2)
+        Do {
+          receive = false
+        }
+        Join(rec)
+        Do {
 
-        println("Response received - comparing results")
+          println("Response received - comparing results")
 
-        println(spikes.deep.mkString(","))
+          println(spikes.deep.mkString(","))
 
-        assert(spikes.length == results.length, "number of spikes does not match expected")
-        assert(spikes.zip(results).map(x => x._1 == x._2).reduce(_ && _), "spikes do not match expected")
-      }
+          assert(spikes.length == results.length, "number of spikes does not match expected")
+          assert(spikes.zip(results).map(x => x._1 == x._2).reduce(_ && _), "spikes do not match expected")
+        }
+      })
+  }
+}
+
+abstract class Cmd {
+  private var next: Option[Cmd] = None
+  private def setNext(n: Cmd): Unit = {
+    assert(next.isEmpty)
+    next = Some(n)
+  }
+  def step(n: Int = 1): Step = { val s = Step(n) ; setNext(s) ; s }
+  def apply(foo: => Unit): Do = { val d = Do(foo) ; setNext(d) ; d }
+  def join(thread: => Thread): Join = { val j = Join(thread) ; setNext(j) ; j }
+  def fork(thread: => Cmd): Thread = { val t = Fork(thread) ; setNext(t) ; t }
+}
+
+// this would eventually be merge into the `test(){}` function
+object RunTest {
+  def apply[M <: Module](cmd: M => Cmd)(dut: M): Unit = {
+    new Interpreter(dut).run(cmd)
   }
 }
 
 
+class Interpreter[M <: Module](dut: M) {
+  def run(cmd: M => Cmd): Unit = {
+
+  }
+
+  private val nextCmd = mutable.ArrayBuffer[Cmd]()
+
+  private def run(cmd: Cmd): Unit = cmd match {
+    case d: Do =>
+      d.foo()
+
+
+    case join: Join => ???
+    case step: Step => ???
+    case thread: Thread => ???
+    case other => throw new RuntimeException(s"Unknown command: $other")
+  }
+}
+
+object Do {
+  def apply(foo: => Unit): Do = {
+    ???
+  }
+}
+
+class Do(val foo: () => Unit) extends Cmd {
+}
+
+object Step {
+  def apply(n: Int = 1): Step = new Step(n)
+}
+
+class Step(n: Int) extends Cmd {}
+
+object Fork {
+  def apply(thread: => Cmd): Thread = ???
+}
+
+object Join {
+  def apply(thread: => Thread): Join = ???
+}
+
+class Join extends Cmd {}
+
+class Thread() extends Cmd {
+
+}
 
 /*
 
